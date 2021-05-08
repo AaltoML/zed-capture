@@ -69,6 +69,7 @@ int main(int argc, char * argv[]) {
     recorder->setVideoRecordingFps((int)params.fps);
 
     std::atomic<bool> running(true);
+    std::atomic<bool> recording(false);
 
     sl_oc::video::VideoCapture videoCap(params);
     if(!videoCap.initializeVideo(-1)) {
@@ -91,21 +92,8 @@ int main(int argc, char * argv[]) {
     sensCap.getFirmwareVersion( fw_maior, fw_minor );
     std::cout << "Firmware version: " << std::to_string(fw_maior) << "." << std::to_string(fw_minor) << std::endl;
     
-    // Start the sensor capture thread. Note: since sensor data can be retrieved at 400Hz and video data frequency is
-    // minor (max 100Hz), we use a separated thread for sensors.
-    std::thread sensThread([&](){
-        while(running.load()) {
-            constexpr double D2R = M_PI / 180.0; // Zed 2 uses degrees, convert to radians
-            const sl_oc::sensors::data::Imu imuData = sensCap.getLastIMUData(2000);
-            if(imuData.valid == sl_oc::sensors::data::Imu::NEW_VAL ) {
-                double timestamp = static_cast<double>(imuData.timestamp) / 1e9;
-                recorder->addGyroscope(timestamp, imuData.gX * D2R, imuData.gY * D2R, imuData.gZ * D2R);
-                recorder->addAccelerometer(timestamp, imuData.aX, imuData.aY, imuData.aZ);
-            }
-        }
-    });
-
     videoCap.enableSensorSync(&sensCap);
+
     int stereoWidth, height; // stereoWidth == width of both cameras combined
     videoCap.getFrameSize(stereoWidth, height);
     int width = stereoWidth / 2;
@@ -115,7 +103,6 @@ int main(int argc, char * argv[]) {
     cv::Mat stereoFrameYUV;
     cv::Mat leftFrameYUV;
     cv::Mat rightFrameYUV;
-    double lastTimeStamp = -1;
 
     // TODO: Could adjust settings
     videoCap.resetBrightness();
@@ -131,12 +118,55 @@ int main(int argc, char * argv[]) {
     std::cout << "Automatic White Balance control: " << ((videoCap.getAutoWhiteBalance())?"ENABLED":"DISABLED") << std::endl;
     std::cout << "Automatic Exposure and Gain control: " << ((videoCap.getAECAGC())?"ENABLED":"DISABLED") << std::endl;
 
+    // Start the sensor capture thread. Note: since sensor data can be retrieved at 400Hz and video data frequency is
+    // minor (max 100Hz), we use a separated thread for sensors.
+    std::mutex syncMutex;
+    double lastImuTimestamp = -1;
+    std::thread sensThread([&](){
+        while(running.load()) {
+            constexpr double D2R = M_PI / 180.0; // Zed 2 uses degrees, convert to radians
+            const sl_oc::sensors::data::Imu imuData = sensCap.getLastIMUData(2000);
+            if(imuData.valid == sl_oc::sensors::data::Imu::NEW_VAL ) {
+                double timestamp = static_cast<double>(imuData.timestamp) / 1e9;
+                syncMutex.lock();
+                lastImuTimestamp = timestamp;
+                syncMutex.unlock();
+                if (recording.load()) {
+                    recorder->addGyroscope(timestamp, imuData.gX * D2R, imuData.gY * D2R, imuData.gZ * D2R);
+                    recorder->addAccelerometer(timestamp, imuData.aX, imuData.aY, imuData.aZ);
+                }
+            }
+        }
+    });
+
+    double lastVideoTimestamp = -1;
     std::thread videoThread([&](){
         while(running.load()) {
             const sl_oc::video::Frame frame = videoCap.getLastFrame(1);
             std::stringstream videoTs;
-            if(frame.data != nullptr && frame.timestamp != lastTimeStamp) {
-                lastTimeStamp = frame.timestamp;
+            double timestamp = static_cast<double>(frame.timestamp) / 1e9;
+
+            syncMutex.lock();
+            double imuTime = lastImuTimestamp;
+            syncMutex.unlock();
+
+            double timeDiff = std::abs(imuTime - timestamp);
+            bool rec = recording.load();
+            constexpr double MAX_ALLOWED_TIME_DIFF_SECONDS = 0.5;
+            if (!rec && timeDiff < MAX_ALLOWED_TIME_DIFF_SECONDS) {
+                std::cout << "Achieved time difference between IMU and Video: " << timeDiff << std::endl;
+                std::cout << std::endl << "Recording! Press Enter to finish recording" << std::endl;
+                rec = true;
+                recording.store(true);
+            } else if (rec && timeDiff > MAX_ALLOWED_TIME_DIFF_SECONDS) {
+                std::cout << "Error! Timediff increased outside allow ranged, stopping: " << timeDiff << std::endl;
+                running.store(false);
+                return;
+            }
+            if (lastVideoTimestamp == timestamp)
+                continue;
+            lastVideoTimestamp = timestamp;
+            if(rec && frame.data != nullptr) {
                 double timestamp = static_cast<double>(frame.timestamp) / 1e9;
 
                 // stereoFrameYUV contains both camera frames, it must be split and conerted to BGR
@@ -180,7 +210,7 @@ int main(int argc, char * argv[]) {
         }
     });
 
-    std::cout << std::endl << "Recording! Press Enter to finish recording" << std::endl;
+    std::cout << std::endl << "Initializing sensors, please wait until IMU and Video are synced" << std::endl;
 
     // Wait for user input before stopping
     std::cin.ignore();
