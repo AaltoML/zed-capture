@@ -34,7 +34,7 @@ Create output dir:
 
 `mkdir output`
 
-Run tool with resolution and framerates as arguments. Wait until you get "Recording..." message, it will take a while to initialize and sync IMU/Video. Recording won't start until they are within 500ms and will halt if they dritft over 500ms afterwards.d
+Run tool with resolution and framerates as arguments. Wait until you get "Recording..." message, it will take a while to initialize and sync IMU/Video. Recording won't start until they are within 500ms and will halt if they dritft over 500ms afterwards.
 
 `./zed_capture 720 30`
 
