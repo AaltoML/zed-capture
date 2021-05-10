@@ -47,4 +47,4 @@ Supported resolution and framerate combinations:
 
 ## License
 
-This code is licensed under the MIT License.
+This code is licensed under the Apache-2.0 License.
