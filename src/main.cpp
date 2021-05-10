@@ -20,7 +20,6 @@ std::string currentISO8601TimeUTC() {
   auto itt = std::chrono::system_clock::to_time_t(now);
   std::ostringstream ss;
   ss << std::put_time(gmtime(&itt), "%FT%H-%M-%SZ");
-
   return ss.str();
 }
 
