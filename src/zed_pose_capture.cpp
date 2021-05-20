@@ -15,8 +15,6 @@
 
 #include <jsonl-recorder/recorder.hpp>
 
-// using namespace sl;
-
 std::string currentISO8601TimeUTC() {
   auto now = std::chrono::system_clock::now();
   auto itt = std::chrono::system_clock::to_time_t(now);
@@ -77,11 +75,29 @@ int main(int argc, char * argv[]) {
 
     sl::Camera zed;
     
-    // Set configuration parameters for the ZED
     sl::InitParameters init_parameters;
     init_parameters.coordinate_units = sl::UNIT::METER;
     init_parameters.coordinate_system = sl::COORDINATE_SYSTEM::RIGHT_HANDED_Y_UP;
     // init_parameters.sdk_verbose = true;
+
+    if (res == "2K") init_parameters.camera_resolution = sl::RESOLUTION::HD2K;
+    else if (res == "1080") init_parameters.camera_resolution = sl::RESOLUTION::HD1080;
+    else if (res == "720") init_parameters.camera_resolution = sl::RESOLUTION::HD720;
+    else if (res == "VGA") init_parameters.camera_resolution = sl::RESOLUTION::VGA;
+    else {
+        std::cout << "Unrecognized resolution: " << res << std::endl;
+        return EXIT_FAILURE;
+    }
+    if (fps == "100") init_parameters.camera_fps = 100;
+    else if (fps == "60") init_parameters.camera_fps = 60;
+    else if (fps == "30") init_parameters.camera_fps = 30;
+    else if (fps == "15") init_parameters.camera_fps = 15;
+    else {
+        std::cout << "Unrecognized fps: " << fps << std::endl;
+        return EXIT_FAILURE;
+    }
+
+    recorder->setVideoRecordingFps(init_parameters.camera_fps);
 
     // Open the camera
     auto returned_state = zed.open(init_parameters);
@@ -158,9 +174,7 @@ int main(int argc, char * argv[]) {
          
     std::thread videoThread([&](){
         while(running.load()) {
-            if (zed.grab() == sl::ERROR_CODE::SUCCESS) {
-                // Get the position of the camera in a fixed reference frame (the World Frame)
-                
+            if (zed.grab() == sl::ERROR_CODE::SUCCESS) {                
                 tracking_state = zed.getPosition(camera_pose, sl::REFERENCE_FRAME::WORLD);
                 if (tracking_state == sl::POSITIONAL_TRACKING_STATE::OK 
                     || tracking_state == sl::POSITIONAL_TRACKING_STATE::SEARCHING) {
