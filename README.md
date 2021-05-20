@@ -12,6 +12,10 @@ Install dependencies:
 
 `sudo apt install libusb-1.0-0-dev libhidapi-libusb0 libhidapi-dev opencv-dev`
 
+Optional:
+
+If you wish to record pose, you need to install [Zed SDK](https://www.stereolabs.com/docs/installation/).
+
 ## Setup
 
 You need to install udev rule to be able to use the device:
@@ -26,7 +30,7 @@ Create a build directory:
 
 Build:
 
-`cmake .. && make -j$(nproc)`
+`cmake .. && make -j$(nproc)` or if you don't have Zed SDK: `cmake -DUSE_ZED_SDK=OFF .. && make -j$(nproc)`
 
 ## Running
 
@@ -34,9 +38,9 @@ Create output dir:
 
 `mkdir output`
 
-Run tool with resolution and framerates as arguments. Wait until you get "Recording..." message, it will take a while to initialize and sync IMU/Video. Recording won't start until they are within 500ms and will halt if they dritft over 500ms afterwards.
+Run tool with resolution and framerates as arguments. Wait until you get "Recording..." message, it will take a while to initialize and sync IMU/Video with `zed_capture`. Recording won't start until they are within 500ms and will halt if they dritft over 500ms afterwards. `zed_pose_capture` captures pose in addition to IMU and camera, but requires the Zed SDK and CUDA compatible hardware.
 
-`./zed_capture 720 30`
+`./zed_capture 720 30` or `./zed_pose_capture 720 30`
 
 Supported resolution and framerate combinations:
 
