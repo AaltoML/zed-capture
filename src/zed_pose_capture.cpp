@@ -9,6 +9,7 @@
 #include <string>
 #include <atomic>
 #include <math.h>
+#include <deque>
 
 #include <opencv2/opencv.hpp>
 #include <nlohmann/json.hpp>
@@ -51,8 +52,8 @@ cv::Mat slMat2cvMat(sl::Mat& input) {
 
 int main(int argc, char * argv[]) {
 
-    if (argc != 3) {
-        std::cout << "Requires FPS and resolution: ./zed_capture <VGA/720/1080/2K> <15/30/60/100>" << std::endl;
+    if (argc < 3) {
+        std::cout << "Requires FPS and resolution: ./zed_capture <VGA/720/1080/2K> <15/30/60/100> (<pose/sensor>) " << std::endl;
         std::cout << "2K: 2208*1242, available framerates: 15 fps." << std::endl;
         std::cout << "1080: 1920*1080, available framerates: 15, 30 fps." << std::endl;
         std::cout << "720: 1280*720, available framerates: 15, 30, 60 fps." << std::endl;
@@ -62,6 +63,14 @@ int main(int argc, char * argv[]) {
 
     std::string res = argv[1];
     std::string fps = argv[2];
+
+    std::string captureMode;
+    if (argc >= 4) {
+        captureMode = argv[3];
+    }
+    bool recordVideo = captureMode != "pose";
+    bool recordImu = captureMode != "pose";
+    bool recordPose = captureMode != "sensor";
 
     // Setup recording
 
@@ -78,7 +87,8 @@ int main(int argc, char * argv[]) {
     sl::InitParameters init_parameters;
     init_parameters.coordinate_units = sl::UNIT::METER;
     init_parameters.coordinate_system = sl::COORDINATE_SYSTEM::RIGHT_HANDED_Y_UP;
-    // init_parameters.sdk_verbose = true;
+    init_parameters.depth_mode == sl::DEPTH_MODE::NONE;
+    init_parameters.sdk_verbose = false;
 
     if (res == "2K") init_parameters.camera_resolution = sl::RESOLUTION::HD2K;
     else if (res == "1080") init_parameters.camera_resolution = sl::RESOLUTION::HD1080;
@@ -107,21 +117,26 @@ int main(int argc, char * argv[]) {
     }
 
     // Set parameters for Positional Tracking
-    sl::PositionalTrackingParameters positional_tracking_param;
-    positional_tracking_param.enable_area_memory = true;
-    returned_state = zed.enablePositionalTracking(positional_tracking_param);
-    if (returned_state != sl::ERROR_CODE::SUCCESS) {
-        std::cout << "Enabling positionnal tracking failed: " << returned_state << std::endl;
-        zed.close();
-        return EXIT_FAILURE;
+    if (recordPose) {
+        sl::PositionalTrackingParameters positional_tracking_param;
+        positional_tracking_param.enable_area_memory = true;
+        returned_state = zed.enablePositionalTracking(positional_tracking_param);
+        if (returned_state != sl::ERROR_CODE::SUCCESS) {
+            std::cout << "Enabling positionnal tracking failed: " << returned_state << std::endl;
+            zed.close();
+            return EXIT_FAILURE;
+        }
     }
 
     // Display camera information (model, serial number, firmware version)
     auto info = zed.getCameraInformation();
-    std::cout << "Camera Model: " << info.camera_model << std::endl;
-    std::cout << "Serial Number: " << info.serial_number << std::endl;
-    std::cout << "Camera Firmware: " << info.camera_configuration.firmware_version << std::endl;
-    std::cout << "Sensors Firmware: " << info.sensors_configuration.firmware_version << std::endl;
+    std::cout << "Camera Model: " << info.camera_model
+        << ", Serial Number: " << info.serial_number
+        << ", Camera Firmware: " << info.camera_configuration.firmware_version
+        << ", Sensors Firmware: " << info.sensors_configuration.firmware_version << std::endl;
+    std::cout << "Pose: " << (recordPose ? "RECORDING" : "off") << std::endl;
+    std::cout << "Video: " << (recordVideo ? "RECORDING" : "off") << std::endl;
+    std::cout << "IMU: " << (recordImu ? "RECORDING" : "off") << std::endl;
 
     // Display accelerometer sensor configuration
     // sl::SensorParameters& sensor_parameters = info.sensors_configuration.accelerometer_parameters;
@@ -141,7 +156,7 @@ int main(int argc, char * argv[]) {
     double previousPoseTimestamp = -1;
 
     std::thread sensThread([&](){
-        while(running.load()) {
+        while(running.load() && recordImu) {
             // Using sl::TIME_REFERENCE::CURRENT decouples this from Camera.grab() so we get full 400Hz sampling rate
             if (zed.getSensorsData(sensors_data, sl::TIME_REFERENCE::CURRENT) == sl::ERROR_CODE::SUCCESS) {
                 constexpr double D2R = M_PI / 180.0; // Zed 2 uses degrees, convert to radians
@@ -164,9 +179,14 @@ int main(int argc, char * argv[]) {
     cv::Mat leftImage;
     cv::Mat rightImage;
 
+    std::deque<double> rollingAvgFramerate;
+    double lastFrameRatePublish = -1;
+    constexpr double PUBLISH_INTERVAL = 1.0;
+    constexpr size_t WINDOW_FRAMES = 100;
+
     nlohmann::json jPose = R"({
         "time": 0.0,
-        "zed": {
+        "groundTruth": {
             "position": { "x": 0.0, "y": 0.0, "z": 0.0 },
             "orientation": { "w": 0.0, "x": 0.0, "y": 0.0, "z": 0.0 }
         }
@@ -174,34 +194,49 @@ int main(int argc, char * argv[]) {
          
     std::thread videoThread([&](){
         while(running.load()) {
-            if (zed.grab() == sl::ERROR_CODE::SUCCESS) {                
-                tracking_state = zed.getPosition(camera_pose, sl::REFERENCE_FRAME::WORLD);
-                if (tracking_state == sl::POSITIONAL_TRACKING_STATE::OK 
-                    || tracking_state == sl::POSITIONAL_TRACKING_STATE::SEARCHING) {
-                    double timestamp = (double)camera_pose.timestamp.getNanoseconds() / 1e9;
-                    if (timestamp != previousPoseTimestamp) {
-                        auto translation = camera_pose.getTranslation();
-                        auto orientation = camera_pose.getOrientation();
-                        jPose["time"] = timestamp;
-                        jPose["zed"]["position"]["x"] = translation.x;
-                        jPose["zed"]["position"]["y"] = translation.y;
-                        jPose["zed"]["position"]["z"] = translation.z;
-                        jPose["zed"]["orientation"]["x"] = orientation.x;
-                        jPose["zed"]["orientation"]["y"] = orientation.y;
-                        jPose["zed"]["orientation"]["z"] = orientation.z;
-                        jPose["zed"]["orientation"]["w"] = orientation.w;
-                        recorder->addJson(jPose);
-                        previousPoseTimestamp = timestamp;
+            if (zed.grab() == sl::ERROR_CODE::SUCCESS) {   
+                double timestamp = (double)zed.getTimestamp(sl::TIME_REFERENCE::IMAGE).getNanoseconds() / 1e9;
+                rollingAvgFramerate.push_front(timestamp);
+
+                if (recordPose) {
+                    tracking_state = zed.getPosition(camera_pose, sl::REFERENCE_FRAME::WORLD);
+                    if (tracking_state == sl::POSITIONAL_TRACKING_STATE::OK 
+                        || tracking_state == sl::POSITIONAL_TRACKING_STATE::SEARCHING) {
+                        double timestamp = (double)camera_pose.timestamp.getNanoseconds() / 1e9;
+                        if (timestamp != previousPoseTimestamp) {
+                            auto translation = camera_pose.getTranslation();
+                            auto orientation = camera_pose.getOrientation();
+                            jPose["time"] = timestamp;
+                            jPose["groundTruth"]["position"]["x"] = translation.x;
+                            jPose["groundTruth"]["position"]["y"] = translation.y;
+                            jPose["groundTruth"]["position"]["z"] = translation.z;
+                            jPose["groundTruth"]["orientation"]["x"] = orientation.x;
+                            jPose["groundTruth"]["orientation"]["y"] = orientation.y;
+                            jPose["groundTruth"]["orientation"]["z"] = orientation.z;
+                            jPose["groundTruth"]["orientation"]["w"] = orientation.w;
+                            recorder->addJson(jPose);
+                            previousPoseTimestamp = timestamp;
+                        }
                     }
                 }
+
+                if (timestamp - lastFrameRatePublish > PUBLISH_INTERVAL) {
+                    lastFrameRatePublish = timestamp;
+                    if (rollingAvgFramerate.size() > 1) {
+                        double fps = rollingAvgFramerate.size() / (rollingAvgFramerate.front() - rollingAvgFramerate.back());
+                        std::cout << "FPS: " << fps << std::endl;
+                    }
+                }
+
+                if (rollingAvgFramerate.size() >= WINDOW_FRAMES) rollingAvgFramerate.pop_back();
+
+                if (!recordVideo) continue;
 
                 zed.retrieveImage(leftZedImage, sl::VIEW::LEFT, sl::MEM::CPU);
                 zed.retrieveImage(rightZedImage, sl::VIEW::RIGHT, sl::MEM::CPU);
 
                 leftImage = slMat2cvMat(leftZedImage);
                 rightImage = slMat2cvMat(rightZedImage);
-
-                double timestamp = (double)zed.getTimestamp(sl::TIME_REFERENCE::IMAGE).getNanoseconds() / 1e9;
 
                 std::vector<recorder::FrameData> frameGroup {
                     recorder::FrameData {
