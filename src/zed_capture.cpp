@@ -10,6 +10,7 @@
 #include <string>
 #include <atomic>
 #include <math.h>
+#include <deque>
 
 #include <opencv2/opencv.hpp>
 
@@ -104,16 +105,23 @@ int main(int argc, char * argv[]) {
     cv::Mat rightFrameYUV;
 
     // TODO: Could adjust settings
-    videoCap.resetBrightness();
+    // videoCap.resetBrightness();
+    // videoCap.setBrightness(6);
     videoCap.resetSharpness();
     videoCap.resetContrast();
     videoCap.resetHue();
     videoCap.resetSaturation();
-    videoCap.resetGamma();
+    // videoCap.resetGamma();
+    videoCap.setGamma(8);
     videoCap.resetAECAGC();
     videoCap.resetAutoWhiteBalance();
     videoCap.resetROIforAECAGC(sl_oc::video::CAM_SENS_POS::LEFT);
     videoCap.resetROIforAECAGC(sl_oc::video::CAM_SENS_POS::RIGHT);
+
+    // std::cout << "Contrast: " << videoCap.getContrast() << std::endl;
+    std::cout << "Gamma: " << videoCap.getGamma() << std::endl;
+    // std::cout << "Brightness: " << videoCap.getBrightness() << std::endl;
+
     std::cout << "Automatic White Balance control: " << ((videoCap.getAutoWhiteBalance())?"ENABLED":"DISABLED") << std::endl;
     std::cout << "Automatic Exposure and Gain control: " << ((videoCap.getAECAGC())?"ENABLED":"DISABLED") << std::endl;
 
@@ -137,6 +145,11 @@ int main(int argc, char * argv[]) {
             }
         }
     });
+
+    std::deque<double> rollingAvgFramerate;
+    double lastFrameRatePublish = -1;
+    constexpr double PUBLISH_INTERVAL = 1.0;
+    constexpr size_t WINDOW_FRAMES = 100;
 
     double lastVideoTimestamp = -1;
     std::thread videoThread([&](){
@@ -167,6 +180,16 @@ int main(int argc, char * argv[]) {
             lastVideoTimestamp = timestamp;
             if(rec && frame.data != nullptr) {
                 double timestamp = static_cast<double>(frame.timestamp) / 1e9;
+
+                rollingAvgFramerate.push_front(timestamp);
+                if (timestamp - lastFrameRatePublish > PUBLISH_INTERVAL) {
+                    lastFrameRatePublish = timestamp;
+                    if (rollingAvgFramerate.size() > 1) {
+                        double fps = rollingAvgFramerate.size() / (rollingAvgFramerate.front() - rollingAvgFramerate.back());
+                        std::cout << "FPS: " << fps << std::endl;
+                    }
+                }
+                if (rollingAvgFramerate.size() >= WINDOW_FRAMES) rollingAvgFramerate.pop_back();
 
                 // stereoFrameYUV contains both camera frames, it must be split and conerted to BGR
                 assert(height == frame.height);
