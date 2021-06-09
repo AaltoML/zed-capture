@@ -53,7 +53,7 @@ cv::Mat slMat2cvMat(sl::Mat& input) {
 int main(int argc, char * argv[]) {
 
     if (argc < 3) {
-        std::cout << "Requires FPS and resolution: ./zed_capture <VGA/720/1080/2K> <15/30/60/100> (<pose/sensor>) " << std::endl;
+        std::cout << "Requires FPS and resolution: ./zed_pose_capture <VGA/720/1080/2K> <15/30/60/100> (<pose/sensor>) " << std::endl;
         std::cout << "2K: 2208*1242, available framerates: 15 fps." << std::endl;
         std::cout << "1080: 1920*1080, available framerates: 15, 30 fps." << std::endl;
         std::cout << "720: 1280*720, available framerates: 15, 30, 60 fps." << std::endl;
